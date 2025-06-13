@@ -2,7 +2,7 @@ from openai import OpenAI
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-api_key = "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"  # Inlocuieste cu cheia ta API OpenAI
+api_key = "sk..."  # Inlocuieste cu cheia ta API OpenAI
 
 client = OpenAI(api_key=api_key)
 
