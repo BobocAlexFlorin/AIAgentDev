@@ -1,129 +1,105 @@
-from openai import OpenAI
-import tiktoken
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+import logging
+import asyncio
+from langdetect import detect
+from cryptography.fernet import Fernet
+import pandas as pd
+import json
 
-api_key = "sk..."  # Inlocuieste cu cheia ta API OpenAI
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
-client = OpenAI(api_key=api_key)
+# Genereaza cheia de encriptie (doar o data)
+key = Fernet.generate_key()
+cipher_suite = Fernet(key)
 
-tokenizer = tiktoken.get_encoding("o200k_base")
+def encrypt_data(data):
+    return cipher_suite.encrypt(data.encode())
 
-with open("aa.txt", "r", encoding="utf-8") as file:
-    text = file.read()
-    
-chunks = text.split('\n\n')
-ntokens = []
-for chunk in chunks:
-    ntokens.append(len(tokenizer.encode(chunk)))
-    
-print("Marimea celui mai mare chunk: ", max(ntokens))
-print("Marimea celui mai mic chunk: ", min(ntokens))
-print("Numarul de chunks: ", len(chunks))
+def decrypt_data(encrypted_data):
+    return cipher_suite.decrypt(encrypted_data).decode()
 
-def group_chunks(chunks, ntokens, max_len=15000, hard_max_len=16000):
-    '''Grupam chunk-uri cat mai mici, pentru a nu depasi limita de tokeni si a.i. sa formeze chunkuri de maxim o pagina'''
-    
-    batches = []
-    cur_batch = ""
-    cur_tokens = 0
-    
-    # Iteram prin chunk-uri si le adaugam in loturi
-    for chunk, ntoken in zip(chunks, ntokens):
-        #scoatem chunk-urile care sunt prea mari
-        if ntoken > hard_max_len:
-            print(f"Avertizre: Chunk-ul a fost omis deoarece este prea lung ({ntoken} tokeni > limita de tokeni ({hard_max_len}) Preview: '{chunk[:50]}...')")
-            continue
-        
-        #daca e loc in batch-ul curent, adaugam chunk-ul
-        if cur_tokens + 1 + ntoken <=max_len:
-            cur_batch += "\n\n" + chunk
-            cur_tokens += 1 + ntoken #adauga un token pentru doua linii noi
-            #altfel, inregistreaza batch-ul si incepe unul nou
-        else:
-            batches.append(cur_batch)
-            cur_batch = chunk
-            cur_tokens = ntoken
-        
-    if cur_batch: #adauga ultimul batch daca exista
-        batches.append(cur_batch)
-        
-    return batches
+# Ecnripteaza cheia API
+api_key = os.getenv("OPENAI_API_KEY")
+encrypted_key = encrypt_data(api_key)
+logger.info(f"Cheia API encriptata: {encrypted_key}")
 
-chunks = group_chunks(chunks, ntokens)
-print("Numarul de batch-uri: ", len(chunks))
-             
-def translate_chunk(chunk, model='gpt-4o',
-                    dest_language='English',
-                    sample_translation=(
-                    r"\poglavje{Osnove Geometrije} \label{osn9Geom}",
-                    r"\chapter{The basics of Geometry} \label{osn9Geom}")):
-    prompt = f'''Translate only the text from the following document into {dest_language}.
-    
-"""
-{sample_translation[0]}
-{chunk}"""
+def detect_language(text):
+    """Detecteaza limba textului."""
+    try:
+        language = detect(text)
+        logger.info(f"Detected language: {language}")
+        return language
+    except Exception as e:
+        logger.error(f"Language detection failed: {e}")
+        return None
 
-{sample_translation[1]}
-'''
-    response = client.chat.completions.create(
-        messages=[{"role": "user", "content":prompt}],
-        model=model,
-        temperature=0,
-        top_p=1,
-        max_tokens=15000,
-    )
-    result = response.choices[0].message.content.strip()
-    result = result.replace('"""', '')
-    return result
-print(translate_chunk(chunks[2], model='gpt-4o', dest_language='English'))
+async def translate_chunk_async(chunk, model, dest_language):
+    """Simuleaza o traducere asincrona (inlocuieste cu async API call)"""
+    await asyncio.sleep(0.1)  # Simulate async processing
+    return f"Translated: {chunk}"
 
-dest_language = 'English'
+async def process_chunks_async(chunks, model, dest_language):
+    """Proceseaza chunk-uri asincron."""
+    tasks = [translate_chunk_async(chunk, model, dest_language) for chunk in chunks]
+    results = await asyncio.gather(*tasks)
+    return results
 
-translated_chunks = []
-for i, chunk in enumerate(chunks):
-    print(str(i+1) + " / " + str(len(chunks)))
-    # tranducem fiecare chuuink
-    translated_chunks.append(translate_chunk(chunk, model='gpt-4o', dest_language=dest_language))
-    
-    #uneste rezultatele
-    result = "\n\n".join(translated_chunks)
-    
-    #salvam rezultatul final
-    with open(f"translated_{dest_language}.txt", "w", encoding="utf-8") as file:
-        file.write(result)
+def track_context(chunks):
+    """Da track la contextul intre chunk-uri"""
+    context = " ".join(chunks)  # Combina chunk-uri pentru context
+    logger.info(f"Tracked context: {context}")
+    return context
 
-#Functie pentru a traduce un chunk folosind ThreadPoolExecutor
-def translate_chunk_wrapper(chunk, model='gpt-4o', dest_language='English'):
-    return translate_chunk(chunk, model=model, dest_language=dest_language)
+def save_feedback(feedback, file_path="feedback.txt"):
+    """Salveaza feedback-ul userilor intr-in fisier."""
+    with open(file_path, "a") as f:
+        f.write(f"{feedback}\n")
+    logger.info("Feedback saved.")
 
-#Setam limba de destinatie
-dest_language = 'English'
+def generate_report(data):
+    """Proceseaza un raport din datele procesate"""
+    df = pd.DataFrame(data)
+    report_path = "report.csv"
+    df.to_csv(report_path, index=False)
+    logger.info(f"Report generated at {report_path}")
 
-#Initializm o lista goala pentru a stoca chunkurile traduse
-translated_chunks = []
+def load_prompt_template(file_path):
+    """Incarca template-ul de prompt dintr-un fisier JSON."""
+    with open(file_path, "r") as f:
+        template = json.load(f)
+    logger.info("Prompt template loaded.")
+    return template
 
-#Folosim ThreadPoolExecutor pentru a traduce chunkurile in paralel
-with ThreadPoolExecutor(max_workers=5) as executor:
-    #Submitem fiecare task pentru traducere
-    futures = {executor.submit(translate_chunk_wrapper, chunk, model='gpt-4o', dest_language=dest_language): i for i, chunk in enumerate(chunks)}
-    
-    #Procesare taskuri finalizate
-    for future in as_completed(futures):
-        i = futures[future]
-        try:
-            translated_chunk = future.result()
-            translated_chunks.append(translated_chunk)
-            print(f"Chunk {i+1} /  {len(chunks)} tradus cu succes.")
-        except Exception as e:
-            print(f"Chunk {i+1} / {len(chunks)} a esuat cu eroarea: {e}")
-            
-#Impreunam chunkurile traduse
-result = '\n\n'.join(translated_chunks)
+# Logica de procesare a chunk-urilor
+if __name__ == "__main__":
+    chunks = ["chunk1", "chunk2", "chunk3"]  #Inlocuieste cu chunk-uri reale
+    model = "gpt-4o"
+    dest_language = "English"
 
-#Salvam rezultatul final
-with open(f"translated_{dest_language}.txt", "w", encoding="utf-8") as file:
-    file.write(result)
-    
-    
-    
-    
+    # Detecteaza limba pentru fiecare chunk
+    for chunk in chunks:
+        language = detect_language(chunk)
+        logger.info(f"Processing chunk in language: {language}")
+
+    # Da track la context intre chunk-uri
+    context = track_context(chunks)
+
+    # Le proceseaza asincron
+    translated_chunks = asyncio.run(process_chunks_async(chunks, model, dest_language))
+
+    # Salveaza feedback-ul utilizatorului
+    feedback = input("Please provide feedback for the translation: ")
+    save_feedback(feedback)
+
+    # Genereaza raportul
+    data = [{"chunk": chunk, "translation": translation} for chunk, translation in zip(chunks, translated_chunks)]
+    generate_report(data)
+
+    # Incarca template-ul de prompt
+    template = load_prompt_template("prompt_template.json")
+    logger.info(f"Using prompt template: {template}")
