@@ -5,6 +5,7 @@ from langdetect import detect
 from cryptography.fernet import Fernet
 import pandas as pd
 import json
+import sys
 
 logging.basicConfig(
     level=logging.INFO,
